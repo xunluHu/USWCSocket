@@ -2,10 +2,13 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <thread>
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include <iconv.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -19,10 +22,51 @@ extern "C" {
 }
 #endif
 using namespace std;
+
+
 vector<int> g_clients;
+bool exitFlag = false;
+char *out = nullptr;
+class CodeConverter {
+
+private:
+    iconv_t cd;
+public:
+
+    // 构造
+    CodeConverter(const char *from_charset,const char *to_charset) {
+        cd = iconv_open(to_charset,from_charset);
+    }
+
+
+    // 析构
+    ~CodeConverter() {
+        iconv_close(cd);
+    }
+
+
+    // 转换输出
+    int convert(char *inbuf,int inlen,char *outbuf,int outlen) {
+        char **pin = &inbuf;
+        char **pout = &outbuf;
+
+        memset(outbuf,0,outlen);
+        return iconv(cd,pin,(size_t *)&inlen,pout,(size_t *)&outlen);
+    }
+};
+void sendMsgToclient(int _csock) {
+    char sendBuf[1024];
+    while(!exitFlag && find(g_clients.begin(), g_clients.end(), _csock) != g_clients.end()) {
+        memset(&sendBuf, 0, sizeof(sendBuf));
+        cin.getline(sendBuf, sizeof(sendBuf));
+        send(_csock, (const char*)&sendBuf, sizeof(sendBuf), 0);
+    }
+}
+
 bool processMsg(int _csock)
 {
     char readBuf[1024];
+    memset(readBuf, 0, sizeof(readBuf));
     int len = recv(_csock, readBuf, sizeof(readBuf), 0);
     if (len <= 0)
     {
@@ -31,8 +75,11 @@ bool processMsg(int _csock)
     }
     else
     {
-        cout << (char *)readBuf << endl;
-        memset(readBuf, 0, sizeof(readBuf));
+        char *out = (char*)malloc(4096);
+        CodeConverter cc2 = CodeConverter("gb2312","utf-8");
+        cc2.convert(readBuf, strlen(readBuf), out, 4096);
+        cout <<"客户端："<< out<< endl;
+        free(out);
         return true;
     }
 }
@@ -64,6 +111,7 @@ int main(int argc, char **argv)
     fd_set fdRead;
     timeval t = {0, 0};
     int max = _sock;
+
     while (true)
     {
         //每一次都进行排序，获取最大描述符的
@@ -99,6 +147,8 @@ int main(int argc, char **argv)
                 g_clients.push_back(_csock);
                 cout << "接受成功 "
                      << "地址是：" << inet_ntoa(client_addr.sin_addr)<< endl;
+                thread t1(sendMsgToclient, _csock);
+                t1.detach();
             }
         }
         for (int i = 0; i < g_clients.size(); ++i) {
